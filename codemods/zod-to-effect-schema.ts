@@ -17,34 +17,32 @@ export default function transformer(file: FileInfo, api: API): string {
   const j = api.jscodeshift;
   const root = j(file.source);
 
-  // Idempotency guard: if S namespace import is already present, do nothing.
-  if (hasEffectSchemaNamespace(root, j)) {
+  const zImports = root.find(j.ImportDeclaration, { source: { value: "zod" } });
+  const sawZImport = zImports.size() > 0;
+  const hasZMemberUsages =
+    root.find(j.MemberExpression, {
+      object: { type: "Identifier", name: "z" },
+      property: { type: "Identifier" },
+    }).size() > 0;
+
+  const needsMigration = sawZImport || hasZMemberUsages;
+  if (!needsMigration) {
     return file.source;
   }
 
-  const zImports = root.find(j.ImportDeclaration, { source: { value: "zod" } });
-  let sawZImport = false;
+  if (!hasEffectSchemaNamespace(root, j)) {
+    root.get().node.program.body.unshift(
+      j.importDeclaration(
+        [j.importNamespaceSpecifier(j.identifier("S"))],
+        j.literal("@effect/schema/Schema"),
+      ),
+    );
+  }
 
   zImports.forEach((path) => {
-    sawZImport = true;
-
     // Remove the zod import declaration.
     j(path).remove();
-
-    // Add namespace import once.
-    if (!hasEffectSchemaNamespace(root, j)) {
-      root.get().node.program.body.unshift(
-        j.importDeclaration(
-          [j.importNamespaceSpecifier(j.identifier("S"))],
-          j.literal("@effect/schema/Schema"),
-        ),
-      );
-    }
   });
-
-  if (!sawZImport) {
-    return file.source;
-  }
 
   const simpleMap = new Set([
     "string",
